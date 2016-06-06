@@ -5,9 +5,9 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/shirou/gopsutil/cpu"
-	"github.com/shirou/gopsutil/internal/common"
-	"github.com/shirou/gopsutil/mem"
+	"github.com/DataDog/gopsutil/cpu"
+	"github.com/DataDog/gopsutil/internal/common"
+	"github.com/DataDog/gopsutil/mem"
 )
 
 var invoke common.Invoker
@@ -21,11 +21,13 @@ type Process struct {
 	name           string
 	status         string
 	parent         int32
+	cmdline        []string
 	numCtxSwitches *NumCtxSwitchesStat
 	uids           []int32
 	gids           []int32
 	numThreads     int32
 	memInfo        *MemoryInfoStat
+	cpuPct         float64
 
 	lastCPUTimes *cpu.TimesStat
 	lastCPUTime  time.Time
@@ -108,6 +110,9 @@ func PidExists(pid int32) (bool, error) {
 // If interval is 0, return difference from last call(non-blocking).
 // If interval > 0, wait interval sec and return diffrence between start and end.
 func (p *Process) Percent(interval time.Duration) (float64, error) {
+	if p.cpuPct != 0 {
+		return p.cpuPct, nil
+	}
 	cpuTimes, err := p.Times()
 	if err != nil {
 		return 0, err

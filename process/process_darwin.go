@@ -7,14 +7,16 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
-	"github.com/shirou/gopsutil/cpu"
-	"github.com/shirou/gopsutil/internal/common"
-	"github.com/shirou/gopsutil/net"
+	"github.com/DataDog/gopsutil/cpu"
+	"github.com/DataDog/gopsutil/internal/common"
+	"github.com/DataDog/gopsutil/net"
 )
 
 // copied from sys/sysctl.h
@@ -62,6 +64,9 @@ func Pids() ([]int32, error) {
 }
 
 func (p *Process) Ppid() (int32, error) {
+	if p.parent != 0 {
+		return p.parent, nil
+	}
 	r, err := callPs("ppid", p.Pid, false)
 	v, err := strconv.Atoi(r[0][0])
 	if err != nil {
@@ -71,11 +76,13 @@ func (p *Process) Ppid() (int32, error) {
 	return int32(v), err
 }
 func (p *Process) Name() (string, error) {
+	if p.name != "" {
+		return p.name, nil
+	}
 	k, err := p.getKProc()
 	if err != nil {
 		return "", err
 	}
-
 	return common.IntToString(k.Proc.P_comm[:]), nil
 }
 func (p *Process) Exe() (string, error) {
@@ -85,6 +92,9 @@ func (p *Process) Exe() (string, error) {
 // Cmdline returns the command line arguments of the process as a string with
 // each argument separated by 0x20 ascii character.
 func (p *Process) Cmdline() (string, error) {
+	if p.cmdline != nil {
+		return strings.Join(p.cmdline, " "), nil
+	}
 	r, err := callPs("command", p.Pid, false)
 	if err != nil {
 		return "", err
@@ -98,6 +108,9 @@ func (p *Process) Cmdline() (string, error) {
 // reported as two separate items. In order to do something better CGO would be needed
 // to use the native darwin functions.
 func (p *Process) CmdlineSlice() ([]string, error) {
+	if p.cmdline != nil {
+		return p.cmdline, nil
+	}
 	r, err := callPs("command", p.Pid, false)
 	if err != nil {
 		return nil, err
@@ -129,6 +142,10 @@ func (p *Process) Parent() (*Process, error) {
 	return nil, fmt.Errorf("could not find parent line")
 }
 func (p *Process) Status() (string, error) {
+	if p.status != "" {
+		return p.status, nil
+	}
+
 	r, err := callPs("state", p.Pid, false)
 	if err != nil {
 		return "", err
@@ -262,6 +279,9 @@ func (p *Process) CPUAffinity() ([]int32, error) {
 	return nil, common.ErrNotImplementedError
 }
 func (p *Process) MemoryInfo() (*MemoryInfoStat, error) {
+	if p.memInfo != nil {
+		return p.memInfo, nil
+	}
 	r, err := callPs("rss,vsize,pagein", p.Pid, false)
 	if err != nil {
 		return nil, err
@@ -421,7 +441,7 @@ func callPs(arg string, pid int32, threadOption bool) ([][]string, error) {
 
 	var cmd []string
 	if pid == 0 { // will get from all processes.
-		cmd = []string{"-ax", "-o", arg}
+		cmd = []string{"-ax", "-o", arg, "-f"}
 	} else if threadOption {
 		cmd = []string{"-x", "-o", arg, "-M", "-p", strconv.Itoa(int(pid))}
 	} else {
@@ -444,6 +464,129 @@ func callPs(arg string, pid int32, threadOption bool) ([][]string, error) {
 		}
 		if len(lr) != 0 {
 			ret = append(ret, lr)
+		}
+	}
+
+	return ret, nil
+}
+
+func AllProcesses(interval time.Duration) ([]Process, error) {
+	extraFields := []string{"rss", "vsize", "pagein", "state"}
+	psout, err := callPs(strings.Join(extraFields, ","), 0, false)
+	if err != nil {
+		return nil, err
+	}
+
+	byPid := make(map[int]Process)
+	for _, r := range psout {
+		rss, err := strconv.Atoi(r[0])
+		if err != nil {
+			continue
+			return nil, err
+		}
+		vms, err := strconv.Atoi(r[1])
+		if err != nil {
+			return nil, err
+		}
+		pagein, err := strconv.Atoi(r[2])
+		if err != nil {
+			return nil, err
+		}
+		status := r[3]
+
+		pid, err := strconv.Atoi(r[5])
+		if err != nil {
+			return nil, err
+		}
+		ppid, err := strconv.Atoi(r[6])
+		if err != nil {
+			return nil, err
+		}
+		cmdline := strings.Join(r[11:], " ")
+
+		byPid[pid] = Process{
+			Pid:     int32(pid),
+			status:  status,
+			parent:  int32(ppid),
+			cmdline: strings.Split(cmdline, " "),
+			memInfo: &MemoryInfoStat{
+				RSS:  uint64(rss) * 1024,
+				VMS:  uint64(vms) * 1024,
+				Swap: uint64(pagein),
+			},
+		}
+	}
+
+	pctByPid, err := allPercent(interval)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := make([]Process, 0, len(byPid))
+	for pid, proc := range byPid {
+		pct, ok := pctByPid[pid]
+		if ok && pct > 0 {
+			proc.cpuPct = pct
+		}
+		if proc.cpuPct == 0 {
+			proc.cpuPct = 0.000000001
+		}
+		ret = append(ret, proc)
+	}
+
+	return ret, nil
+}
+
+func allPercent(interval time.Duration) (map[int]float64, error) {
+	start := time.Now()
+	timesBefore, err := allTimes()
+	if err != nil {
+		return nil, err
+	}
+	time.Sleep(interval)
+	timesAfter, err := allTimes()
+	if err != nil {
+		return nil, err
+	}
+	numcpu := runtime.NumCPU()
+	delta := (time.Now().Sub(start).Seconds()) * float64(numcpu)
+
+	ret := make(map[int]float64)
+	for pid, tb := range timesBefore {
+		ta, ok := timesAfter[pid]
+		if !ok {
+			// Skip PIDs that are missing from the second check.
+			continue
+		}
+		ret[pid] = calculatePercent(tb, ta, delta, numcpu)
+	}
+	return ret, nil
+}
+
+func allTimes() (map[int]*cpu.TimesStat, error) {
+	psout, err := callPs("pid,utime,stime", 0, false)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := make(map[int]*cpu.TimesStat)
+	for _, r := range psout {
+		pid, err := strconv.Atoi(r[0])
+		if err != nil {
+			return nil, err
+		}
+		utime, err := convertCPUTimes(r[1])
+		if err != nil {
+			return nil, err
+		}
+		stime, err := convertCPUTimes(r[2])
+		if err != nil {
+			return nil, err
+		}
+		ret[pid] = &cpu.TimesStat{
+			CPU:    "cpu",
+			User:   utime,
+			System: stime,
 		}
 	}
 
