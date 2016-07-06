@@ -3,6 +3,7 @@ package process
 import (
 	"encoding/json"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/DataDog/gopsutil/cpu"
@@ -18,6 +19,7 @@ func init() {
 
 type Process struct {
 	Pid            int32 `json:"pid"`
+	ThreadPid      int32
 	name           string
 	status         string
 	parent         int32
@@ -63,6 +65,16 @@ type NumCtxSwitchesStat struct {
 func (p Process) String() string {
 	s, _ := json.Marshal(p)
 	return string(s)
+}
+
+func (p Process) ProcPath(combineWith ...string) string {
+	if p.ThreadPid > 0 {
+		args := []string{strconv.Itoa(int(p.Pid)), "task", strconv.Itoa(int(p.ThreadPid))}
+		args = append(args, combineWith...)
+		return common.HostProc(args...)
+	}
+	args := append([]string{strconv.Itoa(int(p.Pid))}, combineWith...)
+	return common.HostProc(args...)
 }
 
 func (o OpenFilesStat) String() string {

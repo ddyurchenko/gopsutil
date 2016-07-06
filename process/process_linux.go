@@ -70,7 +70,19 @@ func NewProcess(pid int32) (*Process, error) {
 	p := &Process{
 		Pid: int32(pid),
 	}
-	file, err := os.Open(common.HostProc(strconv.Itoa(int(p.Pid))))
+	file, err := os.Open(p.ProcPath())
+	defer file.Close()
+	return p, err
+}
+
+// NewThread creates a new Process instance with a thread PID. This will allow
+// the same ops as a regular Process but against a thread's PID instead.
+func NewThread(pid, threadPid int32) (*Process, error) {
+	p := &Process{
+		Pid: pid,
+	}
+	p.ThreadPid = threadPid
+	file, err := os.Open(p.ProcPath())
 	defer file.Close()
 	return p, err
 }
@@ -226,12 +238,34 @@ func (p *Process) NumThreads() (int32, error) {
 	return p.numThreads, nil
 }
 
-// Threads returns a map of threads
-//
-// Notice: Not implemented yet. always returns empty map.
-func (p *Process) Threads() (map[string]string, error) {
-	ret := make(map[string]string, 0)
-	return ret, nil
+// Threads returns a list of *Threads for the process.
+func (p *Process) Threads() ([]*Process, error) {
+	tasksPath := p.ProcPath("task")
+	d, err := os.Open(tasksPath)
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	fnames, err := d.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+
+	threads := make([]*Process, 0, len(fnames))
+	for _, fn := range fnames {
+		cpid, err := strconv.Atoi(fn)
+		if err != nil {
+			// Skip anything that's not an integer.
+			continue
+		}
+		t, err := NewThread(p.Pid, int32(cpid))
+		if err != nil {
+			// Ignore threads that went away.
+			continue
+		}
+		threads = append(threads, t)
+	}
+	return threads, nil
 }
 
 // Times returns CPU times of the process.
@@ -311,7 +345,7 @@ func (p *Process) Connections() ([]net.ConnectionStat, error) {
 
 // NetIOCounters returns NetIOCounters of the process.
 func (p *Process) NetIOCounters(pernic bool) ([]net.IOCountersStat, error) {
-	filename := common.HostProc(strconv.Itoa(int(p.Pid)), "net/dev")
+	filename := p.ProcPath("net/dev")
 	return net.IOCountersByFile(pernic, filename)
 }
 
@@ -323,9 +357,8 @@ func (p *Process) IsRunning() (bool, error) {
 
 // MemoryMaps get memory maps from /proc/(pid)/smaps
 func (p *Process) MemoryMaps(grouped bool) (*[]MemoryMapsStat, error) {
-	pid := p.Pid
 	var ret []MemoryMapsStat
-	smapsPath := common.HostProc(strconv.Itoa(int(pid)), "smaps")
+	smapsPath := p.ProcPath("smaps")
 	contents, err := ioutil.ReadFile(smapsPath)
 	if err != nil {
 		return nil, err
@@ -405,8 +438,7 @@ func (p *Process) MemoryMaps(grouped bool) (*[]MemoryMapsStat, error) {
 
 // Get num_fds from /proc/(pid)/fd
 func (p *Process) fillFromfd() (int32, []*OpenFilesStat, error) {
-	pid := p.Pid
-	statPath := common.HostProc(strconv.Itoa(int(pid)), "fd")
+	statPath := p.ProcPath("fd")
 	d, err := os.Open(statPath)
 	if err != nil {
 		return 0, nil, err
@@ -438,8 +470,7 @@ func (p *Process) fillFromfd() (int32, []*OpenFilesStat, error) {
 
 // Get cwd from /proc/(pid)/cwd
 func (p *Process) fillFromCwd() (string, error) {
-	pid := p.Pid
-	cwdPath := common.HostProc(strconv.Itoa(int(pid)), "cwd")
+	cwdPath := p.ProcPath("cwd")
 	cwd, err := os.Readlink(cwdPath)
 	if err != nil {
 		return "", err
@@ -449,8 +480,7 @@ func (p *Process) fillFromCwd() (string, error) {
 
 // Get exe from /proc/(pid)/exe
 func (p *Process) fillFromExe() (string, error) {
-	pid := p.Pid
-	exePath := common.HostProc(strconv.Itoa(int(pid)), "exe")
+	exePath := p.ProcPath("exe")
 	exe, err := os.Readlink(exePath)
 	if err != nil {
 		return "", err
@@ -460,8 +490,7 @@ func (p *Process) fillFromExe() (string, error) {
 
 // Get cmdline from /proc/(pid)/cmdline
 func (p *Process) fillFromCmdline() (string, error) {
-	pid := p.Pid
-	cmdPath := common.HostProc(strconv.Itoa(int(pid)), "cmdline")
+	cmdPath := p.ProcPath("cmdline")
 	cmdline, err := ioutil.ReadFile(cmdPath)
 	if err != nil {
 		return "", err
@@ -477,8 +506,7 @@ func (p *Process) fillFromCmdline() (string, error) {
 }
 
 func (p *Process) fillSliceFromCmdline() ([]string, error) {
-	pid := p.Pid
-	cmdPath := common.HostProc(strconv.Itoa(int(pid)), "cmdline")
+	cmdPath := p.ProcPath("cmdline")
 	cmdline, err := ioutil.ReadFile(cmdPath)
 	if err != nil {
 		return nil, err
@@ -500,8 +528,7 @@ func (p *Process) fillSliceFromCmdline() ([]string, error) {
 
 // Get IO status from /proc/(pid)/io
 func (p *Process) fillFromIO() (*IOCountersStat, error) {
-	pid := p.Pid
-	ioPath := common.HostProc(strconv.Itoa(int(pid)), "io")
+	ioPath := p.ProcPath("io")
 	ioline, err := ioutil.ReadFile(ioPath)
 	if err != nil {
 		return nil, err
@@ -539,8 +566,7 @@ func (p *Process) fillFromIO() (*IOCountersStat, error) {
 
 // Get memory info from /proc/(pid)/statm
 func (p *Process) fillFromStatm() (*MemoryInfoStat, *MemoryInfoExStat, error) {
-	pid := p.Pid
-	memPath := common.HostProc(strconv.Itoa(int(pid)), "statm")
+	memPath := p.ProcPath("statm")
 	contents, err := ioutil.ReadFile(memPath)
 	if err != nil {
 		return nil, nil, err
@@ -591,8 +617,7 @@ func (p *Process) fillFromStatm() (*MemoryInfoStat, *MemoryInfoExStat, error) {
 
 // Get various status from /proc/(pid)/status
 func (p *Process) fillFromStatus() error {
-	pid := p.Pid
-	statPath := common.HostProc(strconv.Itoa(int(pid)), "status")
+	statPath := p.ProcPath("status")
 	contents, err := ioutil.ReadFile(statPath)
 	if err != nil {
 		return err
@@ -682,7 +707,7 @@ func (p *Process) fillFromStatus() error {
 
 func (p *Process) fillFromStat() (string, int32, *cpu.TimesStat, int64, int32, error) {
 	pid := p.Pid
-	statPath := common.HostProc(strconv.Itoa(int(pid)), "stat")
+	statPath := p.ProcPath("stat")
 	contents, err := ioutil.ReadFile(statPath)
 	if err != nil {
 		return "", 0, nil, 0, 0, err
@@ -718,8 +743,14 @@ func (p *Process) fillFromStat() (string, int32, *cpu.TimesStat, int64, int32, e
 		return "", 0, nil, 0, 0, err
 	}
 
+	// cpu # available since 2.2.8
+	processor, err := strconv.ParseInt(fields[i+37], 10, 32)
+	if err != nil {
+		processor = int64(0)
+	}
+
 	cpuTimes := &cpu.TimesStat{
-		CPU:    "cpu",
+		CPU:    fmt.Sprintf("cpu%d", processor),
 		User:   float64(utime / ClockTicks),
 		System: float64(stime / ClockTicks),
 	}
