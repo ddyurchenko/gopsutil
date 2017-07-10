@@ -68,6 +68,21 @@ func (m MemoryMapsStat) String() string {
 	return string(s)
 }
 
+var hostProc string
+
+func pidPath(pid int32, fname string) string {
+	if hostProc == "" {
+		hostProc = common.GetEnv("HOST_PROC", "/proc")
+	}
+	var b bytes.Buffer
+	b.WriteString(hostProc)
+	b.WriteRune('/')
+	b.WriteString(strconv.Itoa(int(pid)))
+	b.WriteRune('/')
+	b.WriteString(fname)
+	return b.String()
+}
+
 // NewProcess creates a new Process instance, it only stores the pid and
 // checks that the process exists. Other method on Process can be used
 // to get more information about the process. An error will be returned
@@ -412,7 +427,7 @@ func (p *Process) MemoryMaps(grouped bool) (*[]MemoryMapsStat, error) {
 // Get list of /proc/(pid)/fd files
 func (p *Process) fillFromfdList() (string, []string, error) {
 	pid := p.Pid
-	statPath := common.HostProc(strconv.Itoa(int(pid)), "fd")
+	statPath := pidPath(pid, "fd")
 	d, err := os.Open(statPath)
 	if err != nil {
 		return statPath, []string{}, err
@@ -454,7 +469,7 @@ func (p *Process) fillFromfd() (int32, []*OpenFilesStat, error) {
 // Get cwd from /proc/(pid)/cwd
 func (p *Process) fillFromCwd() (string, error) {
 	pid := p.Pid
-	cwdPath := common.HostProc(strconv.Itoa(int(pid)), "cwd")
+	cwdPath := pidPath(pid, "cwd")
 	cwd, err := os.Readlink(cwdPath)
 	if err != nil {
 		return "", err
@@ -465,7 +480,7 @@ func (p *Process) fillFromCwd() (string, error) {
 // Get exe from /proc/(pid)/exe
 func (p *Process) fillFromExe() (string, error) {
 	pid := p.Pid
-	exePath := common.HostProc(strconv.Itoa(int(pid)), "exe")
+	exePath := pidPath(pid, "exe")
 	exe, err := os.Readlink(exePath)
 	if err != nil {
 		return "", err
@@ -476,7 +491,7 @@ func (p *Process) fillFromExe() (string, error) {
 // Get cmdline from /proc/(pid)/cmdline
 func (p *Process) fillFromCmdline() (string, error) {
 	pid := p.Pid
-	cmdPath := common.HostProc(strconv.Itoa(int(pid)), "cmdline")
+	cmdPath := pidPath(pid, "cmdline")
 	cmdline, err := ioutil.ReadFile(cmdPath)
 	if err != nil {
 		return "", err
@@ -493,7 +508,7 @@ func (p *Process) fillFromCmdline() (string, error) {
 
 func (p *Process) fillSliceFromCmdline() ([]string, error) {
 	pid := p.Pid
-	cmdPath := common.HostProc(strconv.Itoa(int(pid)), "cmdline")
+	cmdPath := pidPath(pid, "cmdline")
 	cmdline, err := ioutil.ReadFile(cmdPath)
 	if err != nil {
 		return nil, err
@@ -505,7 +520,7 @@ func (p *Process) fillSliceFromCmdline() ([]string, error) {
 		cmdline = cmdline[:len(cmdline)-1]
 	}
 	parts := bytes.Split(cmdline, []byte{0})
-	var strParts []string
+	strParts := make([]string, len(parts))
 	for _, p := range parts {
 		strParts = append(strParts, string(p))
 	}
@@ -516,7 +531,7 @@ func (p *Process) fillSliceFromCmdline() ([]string, error) {
 // Get IO status from /proc/(pid)/io
 func (p *Process) fillFromIO() (*IOCountersStat, error) {
 	pid := p.Pid
-	ioPath := common.HostProc(strconv.Itoa(int(pid)), "io")
+	ioPath := pidPath(pid, "io")
 	ioline, err := ioutil.ReadFile(ioPath)
 	if err != nil {
 		return nil, err
@@ -555,7 +570,7 @@ func (p *Process) fillFromIO() (*IOCountersStat, error) {
 // Get memory info from /proc/(pid)/statm
 func (p *Process) fillFromStatm() (*MemoryInfoStat, *MemoryInfoExStat, error) {
 	pid := p.Pid
-	memPath := common.HostProc(strconv.Itoa(int(pid)), "statm")
+	memPath := pidPath(pid, "statm")
 	contents, err := ioutil.ReadFile(memPath)
 	if err != nil {
 		return nil, nil, err
@@ -607,7 +622,7 @@ func (p *Process) fillFromStatm() (*MemoryInfoStat, *MemoryInfoExStat, error) {
 // Get various status from /proc/(pid)/status
 func (p *Process) fillFromStatus() error {
 	pid := p.Pid
-	statPath := common.HostProc(strconv.Itoa(int(pid)), "status")
+	statPath := pidPath(pid, "cmdline")
 	contents, err := ioutil.ReadFile(statPath)
 	if err != nil {
 		return err
@@ -697,7 +712,7 @@ func (p *Process) fillFromStatus() error {
 
 func (p *Process) fillTermFromStat() (string, error) {
 	pid := p.Pid
-	statPath := common.HostProc(strconv.Itoa(int(pid)), "stat")
+	statPath := pidPath(pid, "stat")
 	contents, err := ioutil.ReadFile(statPath)
 	if err != nil {
 		return "", err
@@ -723,7 +738,7 @@ func (p *Process) fillTermFromStat() (string, error) {
 
 func (p *Process) fillFromStat() (int32, int32, *cpu.TimesStat, int64, int32, error) {
 	pid := p.Pid
-	statPath := common.HostProc(strconv.Itoa(int(pid)), "stat")
+	statPath := pidPath(pid, "stat")
 	contents, err := ioutil.ReadFile(statPath)
 	if err != nil {
 		return 0, 0, nil, 0, 0, err
@@ -817,10 +832,7 @@ func AllProcesses() (map[int32]*FilledProcess, error) {
 	// All errors are swallowed for now.
 	procs := make(map[int32]*FilledProcess)
 	for _, pid := range pids {
-		p, err := NewProcess(pid)
-		if err != nil {
-			continue
-		}
+		p := &Process{Pid: pid}
 		cmdline, err := p.fillSliceFromCmdline()
 		if err != nil {
 			continue
