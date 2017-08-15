@@ -431,3 +431,66 @@ func getProcessMemoryInfo(h syscall.Handle, mem *PROCESS_MEMORY_COUNTERS) (err e
 	}
 	return
 }
+
+func AllProcesses() (map[int32]*FilledProcess, error) {
+	var w32procs []Win32_Process
+	q := wmi.CreateQuery(&w32procs, "")
+	err := wmi.Query(q, &w32procs)
+	if err != nil {
+		return nil, fmt.Errorf("could not get processes: %s", err)
+	}
+
+	// Collect stats on all processes limiting the number of required syscalls.
+	// All errors are swallowed for now.
+	procs := make(map[int32]*FilledProcess)
+	for _, p := range w32procs {
+		proc := &Process{Pid: int32(p.ProcessID)}
+		ppid, _, _, err := proc.getFromSnapProcess(proc.Pid)
+		if err != nil {
+			continue
+		}
+		ru, err := getRusage(proc.Pid)
+		if err != nil {
+			continue
+		}
+		cmdline := strings.Split(*p.CommandLine, " ")
+		var name string
+		if len(cmdline) > 0 {
+			name = cmdline[0]
+		}
+		mem, err := getMemoryInfo(proc.Pid)
+		if err != nil {
+			continue
+		}
+
+		procs[proc.Pid] = &FilledProcess{
+			Pid:     proc.Pid,
+			Ppid:    ppid,
+			Cmdline: cmdline,
+			CpuTime: cpu.TimesStat{
+				CPU:    "cpu",
+				User:   float64(ru.UserTime.Nanoseconds() / 1000000),
+				System: float64(ru.KernelTime.Nanoseconds() / 1000000),
+			},
+			Nice:        int32(p.Priority),
+			Status:      *p.Status,
+			CreateTime:  ru.CreationTime.Nanoseconds() / 1000000,
+			OpenFdCount: -1, // FIXME: Needs implementation
+			Name:        name,
+			NumThreads:  int32(p.ThreadCount),
+			MemInfo: &MemoryInfoStat{
+				RSS: uint64(mem.WorkingSetSize),
+				VMS: uint64(mem.PagefileUsage),
+			},
+			Cwd: "",
+			IOStat: &IOCountersStat{
+				ReadCount:  uint64(p.ReadOperationCount),
+				ReadBytes:  uint64(p.ReadTransferCount),
+				WriteCount: uint64(p.WriteOperationCount),
+				WriteBytes: uint64(p.WriteTransferCount),
+			},
+		}
+	}
+
+	return procs, nil
+}
