@@ -916,6 +916,12 @@ func AllProcesses() (map[int32]*FilledProcess, error) {
 // before opening it.  on some systems, attempting to open a file that the user does
 // not have permission is problematic for customer security auditing
 func ensurePathReadable(path string) error {
+	start := time.Now()
+	defer func() {
+		elapsed := time.Now().Sub(start)
+
+		log.Infof("took %s checking %s", elapsed, path)
+	}()
 	euid := uint32(os.Geteuid())
 
 	// User is (effectively or actually) root
