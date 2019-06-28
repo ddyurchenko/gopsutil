@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -324,7 +323,7 @@ func (p *Process) MemoryMaps(grouped bool) (*[]MemoryMapsStat, error) {
 	pid := p.Pid
 	var ret []MemoryMapsStat
 	smapsPath := common.HostProc(strconv.Itoa(int(pid)), "smaps")
-	contents, err := ioutil.ReadFile(smapsPath)
+	contents, err := ReadSmallFile(smapsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +479,7 @@ func (p *Process) fillFromExe(user *currentUser) (string, error) {
 func (p *Process) fillFromCmdline() (string, error) {
 	pid := p.Pid
 	cmdPath := common.HostProc(strconv.Itoa(int(pid)), "cmdline")
-	cmdline, err := ioutil.ReadFile(cmdPath)
+	cmdline, err := ReadSmallFile(cmdPath)
 	if err != nil {
 		return "", err
 	}
@@ -497,7 +496,7 @@ func (p *Process) fillFromCmdline() (string, error) {
 func (p *Process) fillSliceFromCmdline() ([]string, error) {
 	pid := p.Pid
 	cmdPath := common.HostProc(strconv.Itoa(int(pid)), "cmdline")
-	cmdline, err := ioutil.ReadFile(cmdPath)
+	cmdline, err := ReadSmallFile(cmdPath)
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +524,7 @@ func (p *Process) fillFromIO(user *currentUser) (*IOCountersStat, error) {
 		return nil, err
 	}
 
-	ioline, err := ioutil.ReadFile(ioPath)
+	ioline, err := ReadSmallFile(ioPath)
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +563,7 @@ func (p *Process) fillFromIO(user *currentUser) (*IOCountersStat, error) {
 func (p *Process) readFromStatm() (*MemoryInfoStat, *MemoryInfoExStat, error) {
 	pid := p.Pid
 	memPath := common.HostProc(strconv.Itoa(int(pid)), "statm")
-	contents, err := ioutil.ReadFile(memPath)
+	contents, err := ReadSmallFile(memPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -625,7 +624,7 @@ func (p *Process) fillFromStatus() error {
 	}
 
 	statPath := common.HostProc(strconv.Itoa(int(pid)), "status")
-	contents, err := ioutil.ReadFile(statPath)
+	contents, err := ReadSmallFile(statPath)
 	if err != nil {
 		return err
 	}
@@ -706,15 +705,36 @@ func (p *Process) fillFromStatus() error {
 			}
 			p.memInfo.Swap = v * 1024
 		}
-
 	}
 	return nil
+}
+
+
+// ReadSmallFile is like os.ReadFile but dangerously optimized for reading files from /proc.
+// The file is not statted first, and the same buffer is used every time.
+var buf *bytes.Buffer // TODO: Make this thread safe
+
+func ReadSmallFile(filename string) ([]byte, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+
+	if buf == nil {
+		buf = bytes.NewBuffer(make([]byte, 0, 8192))
+	} else {
+		buf.Reset()
+	}
+	_, err = buf.ReadFrom(f)
+	f.Close()
+	return buf.Bytes(), err
 }
 
 func (p *Process) fillTermFromStat() (string, error) {
 	pid := p.Pid
 	statPath := common.HostProc(strconv.Itoa(int(pid)), "stat")
-	contents, err := ioutil.ReadFile(statPath)
+	contents, err := ReadSmallFile(statPath)
 	if err != nil {
 		return "", err
 	}
@@ -740,7 +760,7 @@ func (p *Process) fillTermFromStat() (string, error) {
 func (p *Process) fillFromStat() (int32, int32, *cpu.TimesStat, int64, int32, error) {
 	pid := p.Pid
 	statPath := common.HostProc(strconv.Itoa(int(pid)), "stat")
-	contents, err := ioutil.ReadFile(statPath)
+	contents, err := ReadSmallFile(statPath)
 	if err != nil {
 		return 0, 0, nil, 0, 0, err
 	}
