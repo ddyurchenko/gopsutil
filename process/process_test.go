@@ -11,9 +11,33 @@ import (
 	"testing"
 	"time"
 
+	log "github.com/cihub/seelog"
+
 	"github.com/DataDog/gopsutil/internal/common"
 	"github.com/stretchr/testify/assert"
 )
+
+var sink map[int32]*FilledProcess
+
+func BenchmarkAllProcesses(b *testing.B) {
+	var err error
+	errCount := 0
+
+	// Disable logging (as it'll be noisy)
+	log.ReplaceLogger(log.Disabled)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if sink, err = AllProcesses(); err != nil {
+			errCount++
+		}
+	}
+
+
+	if errCount > 0 {
+		fmt.Println("non-zero errors for AllProcesses", errCount)
+	}
+}
 
 var mu sync.Mutex
 
