@@ -26,7 +26,9 @@ func BenchmarkAllProcesses(b *testing.B) {
 	// Disable logging (as it'll be noisy)
 	log.ReplaceLogger(log.Disabled)
 
+	b.ReportAllocs()
 	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
 		if sink, err = AllProcesses(); err != nil {
 			errCount++
