@@ -167,21 +167,26 @@ func Users() ([]UserStat, error) {
 
 }
 
-func getOSRelease() (platform string, version string, err error) {
+func getOSRelease() (string, string, error) {
 	contents, err := common.ReadLines(common.HostEtc("os-release"))
 	if err != nil {
 		return "", "", nil // return empty
 	}
+
+	var platform, version string
 	for _, line := range contents {
 		field := strings.Split(line, "=")
 		if len(field) < 2 {
 			continue
 		}
+
+		value := strings.Trim(field[1], "\"")
+
 		switch field[0] {
 		case "ID": // use ID for lowercase
-			platform = field[1]
+			platform = value
 		case "VERSION":
-			version = field[1]
+			version = value
 		}
 	}
 	return platform, version, nil
